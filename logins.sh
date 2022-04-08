@@ -48,11 +48,9 @@ git_init() { [ "$(git_cmd rev-parse --is-inside-work-tree 2>/dev/null)" = true ]
 
 git_save() { git_init && git_cmd add --all && git_cmd commit --message= --allow-empty-message; }
 
-check_id() { gpg --list-keys "${1:-${id}}" >/dev/null; }
-
 decrypt() { gpg --quiet --decrypt "$logins_file"; }
 
-encrypt() { printf '%s' "$1" | gpg --quiet --yes --armor --output "$logins_file" --recipient "${2:-${id}}" --encrypt - && chmod 600 "$logins_file"; }
+encrypt() { printf '%s' "$1" | gpg --quiet --yes --armor --output "$logins_file" --recipient "${2:-${id}}" --encrypt -; }
 
 json_string() (
 	unset output char; special_chars='\"'; str="$1"
@@ -88,11 +86,11 @@ choose() (
 )
 
 cmd_init() (
-	{ command_exist gpg git && check_id "$1"; } || return
+	command_exist gpg git || return
 	if [ -f "$logins_file" ]; then data="$(decrypt)" && encrypt "$data" "$1"
-	else mkdir -p -m 700 "$data_dir" && encrypt '{}' "$1"; fi || return
-	printf '%s\n' "$1" > "$id_file"
-	chmod 600 "$id_file"; git_save
+	else mkdir -p "$data_dir" && encrypt '{}' "$1"; fi || return
+	printf '%s\n' "$1" > "$id_file"; chmod 700 "$data_dir"
+	chmod 600 "$id_file" "$logins_file"; git_save
 )
 
 cmd_show() (
@@ -101,7 +99,7 @@ cmd_show() (
 )
 
 cmd_assign() (
-	{ command_exist gpg git jq && check_init && check_id; } || return
+	{ command_exist gpg git jq && check_init; } || return
 	assign_key_value="$1"; shift
 	key="$(json_key "$1")"; shift
 	[ -z "${key#'.?'}" ] && { printf 'Empty key is not allowed!\n' 1>&2; return 1; }
@@ -110,22 +108,22 @@ cmd_assign() (
 		jq -nce --argjson data "$data" "\$data | $value" >/dev/null || return 1
 	else { [ "$#" -gt 0 ] && value="$(json_value "$@")"; } || value='{}'; fi
 	data="$(jq -nc --argjson data "$data" "\$data | $key = $value")" || return 1
-	encrypt "$data"; git_save
+	encrypt "$data" && git_save
 )
 
 cmd_copy() (
-	{ command_exist gpg git jq && check_init && check_id; } || return
+	{ command_exist gpg git jq && check_init; } || return
 	unset keys; data="$(decrypt)" || return 1
 	while [ "$#" -gt 1 ]; do key="$(json_key "$1")"; shift
 		{ [ -n "${key#'.?'}" ] && jq -nce --argjson data "$data" "\$data | $key" >/dev/null; } || continue
 		{ [ -n "$keys" ] && keys="${keys},${key}"; } || keys="$key"
 	done; [ -z "$keys" ] && return 1
 	data="$(jq -nc --argjson data "$data" "reduce path(${keys}) as \$item (\$data; ($(json_key "$1") | .[\$item[-1]]) = getpath(\$item))")" || return 1
-	encrypt "$data"; git_save
+	encrypt "$data" && git_save
 )
 
 cmd_remove() (
-	{ command_exist gpg git jq && check_init && check_id; } || return
+	{ command_exist gpg git jq && check_init; } || return
 	unset keys; data="$(decrypt)" || return 1
 	while [ "$#" -gt 0 ]; do key="$(json_key "$1")"; shift
 		if [ -z "${key#'.?'}" ]; then keys='.?'
@@ -133,7 +131,7 @@ cmd_remove() (
 			[ "$ans" = 'YES' ] && break; return 1
 		fi; { [ -n "$keys" ] && keys="${keys},${key}"; } || keys="$key"
 	done; data="$(jq -nc --argjson data "$data" "\$data | del(${keys}) // {}")" || return 1
-	encrypt "$data"; git_save
+	encrypt "$data" && git_save
 )
 
 cmd_get() (
