@@ -2,8 +2,9 @@
 
 # Dependencies: gnupg, git, oath-toolkit, jq, fzf, wl-clipboard, lua5.4
 
+{ umask_default="$(umask)" && umask 077; } || exit
+
 fname="${0##*/}"
-umask_default="$(umask)"
 logins_dir="${LOGINS_DIR:-"${XDG_DATA_HOME}/logins"}"
 id_file="${logins_dir}/gpg-id"
 logins_file="${logins_dir}/logins.json"
@@ -174,7 +175,6 @@ get_opts() (
 	done; printf '%s;; *) print_help; return 1;; esac; shift; done' "$cmd"
 )
 
-umask 077
 case "$1" in
 	init) [ "$#" -eq 2 ] || { print_help; exit 1; }; cmd_init "$2" ;;
 	show) [ "$#" -ge 1 ] || { print_help; exit 1; }; shift; check_init && cmd_show "$@" ;;
