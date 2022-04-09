@@ -3,7 +3,8 @@
 # Dependencies: gnupg, git, oath-toolkit, jq, fzf, wl-clipboard, lua5.4
 
 fname="${0##*/}"
-logins_dir="${LOGINS_DIR:-"${XDG_CONFIG_HOME}/logins"}"
+umask_default="$(umask)"
+logins_dir="${LOGINS_DIR:-"${XDG_DATA_HOME}/logins"}"
 id_file="${logins_dir}/gpg-id"
 logins_file="${logins_dir}/logins.json"
 help_msg="\
@@ -29,7 +30,7 @@ GET-TOTP command options (see 'oathtool' manual):
   --time-step=n := time step duration (default=30)
 
 Environment variables:
-  LOGINS_DIR    := path to directory where the logins is stored (default=\"\${XDG_CONFIG_HOME}/logins\")
+  LOGINS_DIR    := path to directory where the logins is stored (default=\"\${XDG_DATA_HOME}/logins\")
 "
 
 print_help() { printf '%s' "$help_msg" 1>&2; }
@@ -42,11 +43,7 @@ command_exist() (
 
 check_init() { { [ -d "$logins_dir" ] && [ -f "$logins_file" ] && [ -f "$id_file" ]; } || { printf "Try 'init' command first!\n" 1>&2; return 1; }; }
 
-git_cmd() { git -C "$logins_dir" "$@"; }
-
-git_init() { [ "$(git_cmd rev-parse --is-inside-work-tree 2>/dev/null)" = true ] || git_cmd init; }
-
-git_save() { git_init && git_cmd add --all && git_cmd commit --message= --allow-empty-message; }
+create_dir() { ( umask "$umask_default" && mkdir -p "${logins_dir%/*}" ) && mkdir -p "$logins_dir"; }
 
 decrypt() { gpg --quiet --decrypt "$logins_file"; }
 
@@ -86,11 +83,10 @@ choose() (
 )
 
 cmd_init() (
-	command_exist gpg git || return
+	command_exist gpg || return
 	if [ -f "$logins_file" ]; then data="$(decrypt)" && encrypt "$data" "$1"
-	else mkdir -p "$logins_dir" && encrypt '{}' "$1"; fi || return
-	printf '%s\n' "$1" > "$id_file"; chmod 700 "$logins_dir"
-	chmod 600 "$id_file" "$logins_file"; git_save
+	else create_dir && encrypt '{}' "$1"; fi || return
+	printf '%s' "$1" > "$id_file"
 )
 
 cmd_show() (
@@ -99,7 +95,7 @@ cmd_show() (
 )
 
 cmd_assign() (
-	command_exist gpg git jq || return
+	command_exist gpg jq || return
 	assign_key_value="$1"; shift
 	key="$(json_key "$1")"; shift
 	[ -z "${key#'.?'}" ] && { printf 'Empty key is not allowed!\n' 1>&2; return 1; }
@@ -108,22 +104,22 @@ cmd_assign() (
 		jq -nce --argjson data "$data" "\$data | $value" >/dev/null || return 1
 	else { [ "$#" -gt 0 ] && value="$(json_value "$@")"; } || value='{}'; fi
 	data="$(jq -nc --argjson data "$data" "\$data | $key = $value")" || return 1
-	encrypt "$data" && git_save
+	encrypt "$data"
 )
 
 cmd_copy() (
-	command_exist gpg git jq || return
+	command_exist gpg jq || return
 	unset keys; data="$(decrypt)" || return 1
 	while [ "$#" -gt 1 ]; do key="$(json_key "$1")"; shift
 		{ [ -n "${key#'.?'}" ] && jq -nce --argjson data "$data" "\$data | $key" >/dev/null; } || continue
 		{ [ -n "$keys" ] && keys="${keys},${key}"; } || keys="$key"
 	done; [ -z "$keys" ] && return 1
 	data="$(jq -nc --argjson data "$data" "reduce path(${keys}) as \$item (\$data; ($(json_key "$1") | .[\$item[-1]]) = getpath(\$item))")" || return 1
-	encrypt "$data" && git_save
+	encrypt "$data"
 )
 
 cmd_remove() (
-	command_exist gpg git jq || return
+	command_exist gpg jq || return
 	unset keys; data="$(decrypt)" || return 1
 	while [ "$#" -gt 0 ]; do key="$(json_key "$1")"; shift
 		if [ -z "${key#'.?'}" ]; then keys='.?'
@@ -131,7 +127,7 @@ cmd_remove() (
 			[ "$ans" = 'YES' ] && break; return 1
 		fi; { [ -n "$keys" ] && keys="${keys},${key}"; } || keys="$key"
 	done; data="$(jq -nc --argjson data "$data" "\$data | del(${keys}) // {}")" || return 1
-	encrypt "$data" && git_save
+	encrypt "$data"
 )
 
 cmd_get() (
@@ -178,13 +174,14 @@ get_opts() (
 	done; printf '%s;; *) print_help; return 1;; esac; shift; done' "$cmd"
 )
 
+umask 077
 case "$1" in
 	init) [ "$#" -eq 2 ] || { print_help; exit 1; }; cmd_init "$2" ;;
 	show) [ "$#" -ge 1 ] || { print_help; exit 1; }; shift; check_init && cmd_show "$@" ;;
 	assign) [ "$#" -ge 2 ] || { print_help; exit 1; }; shift; check_init && cmd_assign false "$@" ;;
 	assign-key) [ "$#" -eq 3 ] || { print_help; exit 1; }; check_init && cmd_assign true "$2" "$3" ;;
 	assign-passwd) [ "$#" -eq 2 ] || { [ "$#" -eq 3 ] && is_digit "$3"; } || { print_help; exit 1; }
-		check_init && cmd_assign false "$2" "$(gen-passwd.lua "${3:-32}")" ;;
+		check_init && command_exist lua5.4 gen-passwd && cmd_assign false "$2" "$(gen-passwd "${3:-32}")" ;;
 	copy) [ "$#" -ge 3 ] || { print_help; exit 1; }; shift; check_init && cmd_copy "$@" ;;
 	remove) [ "$#" -ge 2 ] || { print_help; exit 1; }; shift; check_init && cmd_remove "$@" ;;
 	get) shift; eval "$(get_opts '--clip|=')" && check_init && value="$(cmd_get)" && \
@@ -192,6 +189,6 @@ case "$1" in
 	get-totp) shift; eval "$(get_opts '--clip|= --hex --mode= --digits= --time-step=')" && check_init && \
 		value="$(cmd_get)" && value="$(totp "$opt2" "${opt3_arg-SHA1}" "${opt4_arg-6}" "${opt5_arg-30}" "$value")" && \
 		if "$opt1"; then clip "${opt1_arg-30}" "$value"; else printf '%s\n' "$value"; fi ;;
-	git) shift; check_init && git_init && git_cmd "$@" ;;
+	git) shift; command_exist git && create_dir && git -C "$logins_dir" "$@" ;;
 	*) print_help; exit 1 ;;
 esac
