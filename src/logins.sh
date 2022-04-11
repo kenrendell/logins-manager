@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Dependencies: gnupg, git, oath-toolkit, jq, fzf, wl-clipboard, lua5.4
+# Dependencies: gnupg, git, oath-toolkit, jq, fzf, wl-clipboard, lua
 
 { umask_default="$(umask)" && umask 077; } || exit
 
@@ -9,7 +9,8 @@ logins_dir="${LOGINS_DIR:-"${XDG_DATA_HOME}/logins"}"
 id_file="${logins_dir}/gpg-id"
 logins_file="${logins_dir}/logins.json"
 help_msg="\
-Usage: $fname init <ID>
+Usage: $fname reset
+       $fname init <ID>
        $fname show [key...]
        $fname assign <key> [value...]
        $fname assign-key <key> <key-value>
@@ -176,6 +177,7 @@ get_opts() (
 )
 
 case "$1" in
+	reset) [ "$#" -eq 0 ] || { print_help; exit 1; }; rm -rf "$logins_dir" ;;
 	init) [ "$#" -eq 2 ] || { print_help; exit 1; }; cmd_init "$2" ;;
 	show) [ "$#" -ge 1 ] || { print_help; exit 1; }; shift; check_init && cmd_show "$@" ;;
 	assign) [ "$#" -ge 2 ] || { print_help; exit 1; }; shift; check_init && cmd_assign false "$@" ;;
