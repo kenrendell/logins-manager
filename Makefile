@@ -2,7 +2,7 @@
 
 PREFIX = /usr/local
 BINDIR = $(DESTDIR)$(PREFIX)/bin
-SRC    = logins.sh gen-passwd.lua
+SRC    = logins.sh gen-random.lua
 
 all:
 	@printf "Try 'make install' (with root privilege if needed)\n"

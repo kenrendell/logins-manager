@@ -1,11 +1,11 @@
 #!/usr/bin/env lua5.4
--- Password Generator
+-- Random ASCII string generator
 
--- Usage: gen-passwd.lua <length>
+-- Print usage
 if #arg > 1 or #arg < 1 or arg[1]:match('%D') then
-	io.stderr:write('Usage: gen-passwd.lua <length>\n')
+	io.stderr:write(string.format('Usage: %s <length>\n', arg[0]:match('([^/]+)$')))
 	os.exit(1)
-end local chars, pass = table.pack({}, {}, {}, {}), {}
+end local chars, random_str = table.pack({}, {}, {}, {}), {}
 
 -- Get the ASCII printable characters (32-126)
 for i = 32, 126 do
@@ -34,8 +34,8 @@ local function shuffle(tb)
 	end return tb
 end
 
--- Generate password
+-- Generate random string
 for i = 1, tonumber(arg[1]) do
 	local subchars = shuffle(shuffle(chars)[urandom(#chars)])
-	table.insert(pass, subchars[urandom(#subchars)])
-end io.stdout:write(table.concat(pass) .. '\n')
+	table.insert(random_str, subchars[urandom(#subchars)])
+end io.stdout:write(table.concat(random_str) .. '\n')
