@@ -5,28 +5,21 @@
 { umask_default="$(umask)" && umask 077; } || exit
 
 fname="${0##*/}"
-logins_dir="${LOGINS_DIR:-"${XDG_DATA_HOME}/logins"}"
+logins_dir="${XDG_DATA_HOME}/logins"
 id_file="${logins_dir}/gpg-id"
 logins_file="${logins_dir}/logins.json.gpg"
 help_msg="\
 Usage: $fname init <ID>
-       $fname [assign|show|copy|move|remove|reset]
-       $fname get [--clip[=n]]
-       $fname get-totp [--clip[=n]] [--hex] [--mode=s] [--digits=n] [--time-step=n]
+       $fname [get|assign|show|copy|move|remove|reset]
        $fname git <command...>
-
-GET command options:
-  --clip[=n]    := copy to clipboard (wayland only)
-
-GET-TOTP command options (see 'oathtool' manual):
-  --clip[=n]    := copy to clipboard (wayland only)
-  --hex         := use hex encoding instead of base32
-  --mode=s      := use mode 'SHA1', 'SHA256', or 'SHA512' (default='SHA1')
-  --digits=n    := number of digits in one-time password (default=6)
-  --time-step=n := time step duration (default=30)
-
-Environment variables:
-  LOGINS_DIR    := path to directory where the logins is stored (default=\"\${XDG_DATA_HOME}/logins\")
+"
+cmd_get_help_msg="\
+Commands:
+  <unsigned-number> := print the value
+  t := toggle the time-based OTP mode
+  c := toggle the clipboard mode
+  l := print the list of selected paths (with format '[n] length path')
+  q := quit
 "
 newline='
 '
@@ -47,7 +40,7 @@ decrypt() { gpg --quiet --decrypt "$logins_file"; }
 
 encrypt() { id="${2:-"$(cat "$id_file")"}" && printf '%s' "$1" | gpg --quiet --yes --armor --output "$logins_file" --recipient "$id" --encrypt -; }
 
-json_string() (
+json_string() ( # json_string <string>
 	unset output char; special_chars='\"'; str="$1"
 	while [ -n "${char:="${str%"${str#?}"}"}" ]; do
 		[ -z "${special_chars##*"${char}"*}" ] && char="\\${char}"
@@ -55,15 +48,12 @@ json_string() (
 	done; printf '"%s"' "$output"
 )
 
-json_key() (
-	unset output
-	for key_path in "$@"; do output="${output}."
-		[ -n "${key_path##*/}" ] && key_path="${key_path}/"
-		while [ -n "$key_path" ]; do
-			key="${key_path%%/*}"; key_path="${key_path#*/}"
-			[ -n "$key" ] && output="${output}[$(json_string "$key")]"
-		done; output="${output}?,"
-	done; printf '%s' "${output%,}"
+json_key() ( # json_key <absolute-path>
+	key_path="${1%/}/"; output='.'
+	while [ -n "$key_path" ]; do
+		key="${key_path%%/*}"; key_path="${key_path#*/}"
+		[ -n "$key" ] && output="${output}[$(json_string "$key")]"
+	done; printf '%s?' "$output"
 )
 
 choose() ( input="$(cat -)" && [ -n "$input" ] && printf '%s' "$input" | fzf "$@" )
@@ -75,7 +65,7 @@ cmd_init() (
 	printf '%s' "$1" > "$id_file"
 )
 
-get_paths() (
+get_paths() ( # get_paths <json-string> [true [false]|false [false]]
 	exp='([paths(strings, arrays) | select(.[-1] | type == "string")] | map("/" + join("/"))[])'
 	[ -n "$2" ] && { "$2" || exp=; exp='(paths(objects) | "/" + join("/") + "/"),'"${exp}" && "${3-true}" && exp='"/",'"${exp}"; }
 	jq -rnc --argjson data "$1" '$data | ('"${exp%,})" | sort
@@ -87,7 +77,7 @@ search_path() (
 )
 
 cmd_assign() (
-	command_exist gpg jq fzf lua5.4 gen-random || return
+	{ check_init && command_exist gpg jq fzf lua5.4 gen-random; } || return
 	unset value; data="$(decrypt)" || return
 	paths="$(get_paths "$data" true)"
 	chosen_path="$(printf '%s' "$paths" | choose --no-multi --header='Assign to?')" || return
@@ -110,7 +100,7 @@ cmd_assign() (
 )
 
 cmd_copy() (
-	command_exist gpg jq fzf || return
+	{ check_init && command_exist gpg jq fzf; } || return
 	unset keys key_path move; data="$(decrypt)" || return
 	{ "${move="${1-false}"}" && header='Move'; } || header='Copy'
 	chosen_path="$(get_paths "$data" true false | choose --multi --header="${header}?")${newline}" || return
@@ -133,7 +123,7 @@ cmd_copy() (
 )
 
 cmd_show() (
-	command_exist gpg jq fzf || return
+	{ check_init && command_exist gpg jq fzf; } || return
 	unset key_path; data="$(decrypt)" || return
 	chosen_path="$(get_paths "$data" true | choose --multi --header='Show?')${newline}" || return
 	while [ -n "${key_path:="${chosen_path%%"${newline}"*}"}" ]; do
@@ -144,7 +134,7 @@ cmd_show() (
 )
 
 cmd_remove() (
-	command_exist gpg jq fzf || return
+	{ check_init && command_exist gpg jq fzf; } || return
 	unset keys key_path; data="$(decrypt)" || return
 	chosen_path="$(get_paths "$data" true | choose --multi --header='Remove?')${newline}" || return
 	while [ -n "${key_path:="${chosen_path%%"${newline}"*}"}" ]; do
@@ -156,16 +146,6 @@ cmd_remove() (
 	done; data="$(jq -nc --argjson data "$data" '$data | del('"${keys#,}) // {}")" && encrypt "$data"
 )
 
-cmd_get() (
-	command_exist gpg jq fzf || return
-	data="$(decrypt)" || return
-	chosen_path="$(get_paths "$data" | choose --no-multi)" || return
-	key="$(json_key "$chosen_path")"
-	if jq -nce --argjson data "$data" "\$data | $key | type == \"array\"" >/dev/null; then
-		jq -rnc --argjson data "$data" "\$data | $key | .[]" | choose --no-multi --header="$chosen_path"
-	else jq -rnc --argjson data "$data" "\$data | $key"; fi
-)
-
 is_digit() (
 	for n in "$@"; do
 		{ [ -z "$n" ] || { [ "${#n}" -gt 1 ] && [ "${n#0}" != "$n" ]; }; } && return 1
@@ -173,46 +153,69 @@ is_digit() (
 	done
 )
 
-clip() {
-	command_exist wl-copy || return
-	is_digit "$1" || { print_help; return 1; }
-	[ -z "$WAYLAND_DISPLAY" ] && { printf 'No wayland display!\n' 1>&2; return 1; }
-	if [ "$1" -eq 0 ]; then wl-copy --trim-newline "$2"
-	else timeout "$1" wl-copy --foreground --trim-newline "$2" & fi
-}
+# clip <string>
+clip() { command_exist wl-copy timeout && timeout 30 wl-copy --foreground --trim-newline "$1" & }
 
-totp() {
+field() ( # field <delimiter> <number> <string>
+	unset output; str="${3}${1}"; count="$2"
+	while [ -n "$str" ] && [ "$count" -gt 0 ]; do count="$((count - 1))"
+		output="${str%%"${1}"*}"; str="${str#*"${1}"}"
+	done; [ "$count" -gt 0 ] && output=
+	printf '%s' "$output"
+)
+
+totp() { # totp <KEY:DIGEST:LENGTH:STEP>
 	command_exist oathtool || return
-	is_digit "$3" "$4" || { print_help; return 1; }
-	if "$1"; then oathtool --totp="$2" --digits="$3" --time-step-size="$4" "$5"
-	else oathtool --base32 --totp="$2" --digits="$3" --time-step-size="$4" "$5"; fi
+	key="$(field : 1 "$1")"; digest="$(field : 2 "$1")"
+	length="$(field : 3 "$1")"; time_step="$(field : 4 "$1")"
+	[ -n "$key" ] && oathtool --totp="${digest:-SHA1}" --digits="${length:-6}" --time-step-size="${time_step:-30}" --base32 "$key"
 }
 
-get_opts() (
-	cmd='while true; do case "$1" in "") break'; count=1
-	for opt in $1; do cmd="opt${count}=false; $cmd"
-		if [ -z "${opt%%*|=}" ]; then opt="${opt%|=}"
-			cmd="${cmd};; '${opt}'|'${opt}='*) \$opt${count} && { print_help; return 1; }; opt${count}=true; [ -z \"\${1##'${opt}='*}\" ] && opt${count}_arg=\"\${1#'${opt}='}\""
-		elif [ -z "${opt%%*=}" ]; then
-			cmd="${cmd};; '${opt}'*) \$opt${count} && { print_help; return 1; }; opt${count}=true; opt${count}_arg=\"\${1#'${opt}'}\""
-		else cmd="${cmd};; '${opt}') \$opt${count} && { print_help; return 1; }; opt${count}=true"; fi
-		count=$((count + 1))
-	done; printf '%s;; *) print_help; return 1;; esac; shift; done' "$cmd"
+list() ( # list <data> <chosen-path>
+	unset key_path; count=1
+	chosen_path="${2}${newline}"
+	while [ -n "${key_path:="${chosen_path%%"${newline}"*}"}" ]; do
+		length="$(jq -rnc --argjson data "$1" '$data | '"$(json_key "$key_path")"' | if type == "array" then length else 1 end')" \
+		&& printf '[%d] %d %s\n' "$count" "$length" "$key_path"
+		chosen_path="${chosen_path#*"${newline}"}"; count="$((count + 1))"; key_path=
+	done
+)
+
+trim_zero() ( n="$1"; while [ -n "$n" ] && [ -z "${n##0*}" ]; do n="${n#0}"; done; printf '%s' "${n:-0}" )
+
+get_path_value() ( # get_path_value <data> <paths> <index>
+	unset rdigit ldigit key
+	[ -n "${3##*.*.*}" ] && is_digit "${ldigit="$(trim_zero "${3%%.*}")"}" \
+	&& { [ -n "${3##*.*}" ] || is_digit "${rdigit="$(trim_zero "${3##*.}")"}"; } \
+	&& [ -n "${key="$(field "$newline" "$ldigit" "$2")"}" ] && key="$(json_key "$key")" && if [ -n "$rdigit" ]
+	then jq -rnc --argjson data "$1" --argjson i "$rdigit" '$data | '"${key}"' | if type == "array" then .[$i]? // "" elif $i == 0 then . else "" end'
+	else jq -rnc --argjson data "$1" '$data | '"${key}"' | if type == "array" then join("\n") else . end'; fi
+)
+
+cmd_get() (
+	{ check_init && command_exist gpg jq fzf; } || return
+	unset key_path input; totp_mode=0; clip_mode=0
+	data="$(decrypt)" && chosen_path="$(get_paths "$data" | choose --multi)" \
+	&& printf "Enter 'h' for more information.\n" \
+	&& while [ "${input=l}" != 'q' ]; do case "$input" in
+		t) totp_mode="$(((totp_mode + 1) % 2))"; printf 'totp mode = %d\n' "$totp_mode" ;;
+		c) clip_mode="$(((clip_mode + 1) % 2))"; printf 'clip mode = %d\n' "$clip_mode" ;;
+		l) list "$data" "$chosen_path" ;;
+		h) printf '%s' "$cmd_get_help_msg" ;;
+		*) [ -n "$input" ] && if ! value="$(get_path_value "$data" "$chosen_path" "$input")"; then printf 'invalid input!\n'
+			else { [ "$totp_mode" -ne 1 ] || value="$(totp "$value")"; } && { { [ "$clip_mode" -ne 1 ] && printf '%s\n' "$value"; } || clip "$value"; }; fi
+	esac; printf '> '; read -r input; done
 )
 
 case "$1" in
 	reset) [ "$#" -eq 1 ] || { print_help; exit 1; }; rm -rf "$logins_dir" ;;
 	init) [ "$#" -eq 2 ] || { print_help; exit 1; }; cmd_init "$2" ;;
-	assign) [ "$#" -eq 1 ] || { print_help; exit 1; }; check_init && cmd_assign ;;
-	show) [ "$#" -eq 1 ] || { print_help; exit 1; }; check_init && cmd_show ;;
-	copy) [ "$#" -eq 1 ] || { print_help; exit 1; }; check_init && cmd_copy ;;
-	move) [ "$#" -eq 1 ] || { print_help; exit 1; }; check_init && cmd_copy true ;;
-	remove) [ "$#" -eq 1 ] || { print_help; exit 1; }; check_init && cmd_remove ;;
-	get) shift; eval "$(get_opts '--clip|=')" && check_init && value="$(cmd_get)" && \
-		if "$opt1"; then clip "${opt1_arg-30}" "$value"; else printf '%s\n' "$value"; fi ;;
-	get-totp) shift; eval "$(get_opts '--clip|= --hex --mode= --digits= --time-step=')" && check_init && \
-		value="$(cmd_get)" && value="$(totp "$opt2" "${opt3_arg-SHA1}" "${opt4_arg-6}" "${opt5_arg-30}" "$value")" && \
-		if "$opt1"; then clip "${opt1_arg-30}" "$value"; else printf '%s\n' "$value"; fi ;;
+	assign) [ "$#" -eq 1 ] || { print_help; exit 1; }; cmd_assign ;;
+	show) [ "$#" -eq 1 ] || { print_help; exit 1; }; cmd_show ;;
+	copy) [ "$#" -eq 1 ] || { print_help; exit 1; }; cmd_copy ;;
+	move) [ "$#" -eq 1 ] || { print_help; exit 1; }; cmd_copy true ;;
+	remove) [ "$#" -eq 1 ] || { print_help; exit 1; }; cmd_remove ;;
+	get) [ "$#" -eq 1 ] || { print_help; exit 1; }; cmd_get ;;
 	git) shift; command_exist git && create_dir && git -C "$logins_dir" "$@" ;;
 	*) print_help; exit 1 ;;
 esac
