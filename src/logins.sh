@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Dependencies: gnupg, git, oath-toolkit, jq, fzf, wl-clipboard, lua
+# Dependencies: gnupg, git, openssl, jq, fzf, wl-clipboard, lua
 
 { umask_default="$(umask)" && umask 077; } || exit
 
@@ -15,10 +15,9 @@ Usage: $fname init <ID>
 "
 cmd_get_help_msg="\
 Commands:
-  <unsigned-number> := print the value
-  t := toggle the time-based OTP mode
+  <int>[.<int>][t] := print the value (append 't' to get the TOTP code)
   c := toggle the clipboard mode
-  l := print the list of selected paths (with format '[n] length path')
+  l := print the list of selected paths (with format '[n] lines path')
   q := quit
 "
 newline='
@@ -146,16 +145,6 @@ cmd_remove() (
 	done; data="$(jq -nc --argjson data "$data" '$data | del('"${keys#,}) // {}")" && encrypt "$data"
 )
 
-is_digit() (
-	for n in "$@"; do
-		{ [ -z "$n" ] || { [ "${#n}" -gt 1 ] && [ "${n#0}" != "$n" ]; }; } && return 1
-		while [ -n "$n" ]; do [ "${n#[0-9]}" != "$n" ] || return 1; n="${n#[0-9]}"; done
-	done
-)
-
-# clip <string>
-clip() { command_exist wl-copy timeout && timeout 30 wl-copy --foreground --trim-newline "$1" & }
-
 field() ( # field <delimiter> <number> <string>
 	unset output; str="${3}${1}"; count="$2"
 	while [ -n "$str" ] && [ "$count" -gt 0 ]; do count="$((count - 1))"
@@ -164,16 +153,43 @@ field() ( # field <delimiter> <number> <string>
 	printf '%s' "$output"
 )
 
-totp() { # totp <KEY:DIGEST:LENGTH:STEP>
-	command_exist oathtool || return
-	key="$(field : 1 "$1")"; digest="$(field : 2 "$1")"
-	length="$(field : 3 "$1")"; time_step="$(field : 4 "$1")"
-	[ -n "$key" ] && oathtool --totp="${digest:-SHA1}" --digits="${length:-6}" --time-step-size="${time_step:-30}" --base32 "$key"
-}
+to_binary() ( # to_binary <number>
+	i=0; num="$1"; bin=
+	while [ "$i" -lt 8 ]; do
+		bin="$(printf '\\%03o' "$(((num >> (8 * i)) & 255))")${bin}"
+		i="$((i + 1))"
+	done; printf '%b' "$bin"
+)
+
+is_base32() ( # is_base32 <string>
+	[ "$((${#1} % 8))" -eq 0 ] && [ -n "${1##*[!A-Z2-7=]*}" ] && pad="${1#"${1%%=*}"}" && \
+	{ [ -z "${pad#=}" ] || [ -z "${pad#===}" ] || [ -z "${pad#====}" ] || [ -z "${pad#======}" ]; }
+)
+
+is_integer() ( n="${1#[+-]}" && [ -n "$n" ] && [ -n "${n##*[!0-9]*}" ] && [ -n "${n##0?*}" ] )
+
+# clip <string>
+clip() { command_exist wl-copy timeout && timeout 30 wl-copy --foreground --trim-newline "$1" & }
+
+# See 'RFC 6238' and 'RFC 4226'
+totp() ( # totp <base32-key>[:digest[:digits[:interval[:offset]]]]
+	command_exist openssl || return
+	{ [ -n "${1##*"${newline}"*}" ] && key="$(field : 1 "$1" | tr -d '[:space:]' | tr '0189[:lower:]' 'OLBG[:upper:]')" && is_base32 "$key"; } \
+	|| { printf "TOTP: value must be in format '<base32-key>[:digest[:digits[:interval[:offset]]]]' without newlines\n" 1>&2; return 1; }
+	time="$(date +%s)"; key="$(printf '%s' "$key" | base32 --decode - | od --output-duplicates --address-radix=n --format=x1 | tr -d '[:space:]')"
+	digest="$(field : 2 "$1" | tr '[:upper:]' '[:lower:]')"; digits="$(field : 3 "$1")"; interval="$(field : 4 "$1")"; offset="$(field : 5 "$1")"
+	case "${digest:=sha1}" in sha1|sha256|sha512) ;; *) printf "TOTP: digest must be sha1, sha256 or sha512 (default='sha1')\n" 1>&2; return 1 ;; esac
+	{ is_integer "${digits:=6}" && [ "$digits" -ge 6 ] && [ "$digits" -le 8 ]; } || { printf 'TOTP: digits must be 6, 7 or 8 (default=6)\n' 1>&2; return 1; }
+	{ is_integer "${interval:=30}" && [ "$interval" -gt 0 ]; } || { printf 'TOTP: interval must be greater than 0 (default=30)\n' 1>&2; return 1; }
+	{ is_integer "${offset:=0}" && [ "$offset" -le "$time" ]; } || { printf 'TOTP: offset must be less than or equal to the current time (default=0)\n' 1>&2; return 1; }
+	hmac="$(to_binary "$(((time - offset) / interval))" | openssl dgst "-${digest}" -mac HMAC -macopt "hexkey:${key}")" || return
+	hmac="0x${hmac##*[[:space:]]}"; i="$((3 + (hmac & 0xf) * 2))"; m="$(printf "1%0${digits}d" 0)"
+	h="0x$(printf '%s' "$hmac" | cut -c "${i}-$((i + 7))" -)"
+	printf "%0${digits}d\n" "$(((h & 0x7fffffff) % m))"
+)
 
 list() ( # list <data> <chosen-path>
-	unset key_path; count=1
-	chosen_path="${2}${newline}"
+	unset key_path; count=0; chosen_path="${2}${newline}"
 	while [ -n "${key_path:="${chosen_path%%"${newline}"*}"}" ]; do
 		length="$(jq -rnc --argjson data "$1" '$data | '"$(json_key "$key_path")"' | if type == "array" then length else 1 end')" \
 		&& printf '[%d] %d %s\n' "$count" "$length" "$key_path"
@@ -181,29 +197,27 @@ list() ( # list <data> <chosen-path>
 	done
 )
 
-trim_zero() ( n="$1"; while [ -n "$n" ] && [ -z "${n##0*}" ]; do n="${n#0}"; done; printf '%s' "${n:-0}" )
-
-get_path_value() ( # get_path_value <data> <paths> <index>
-	unset rdigit ldigit key
-	[ -n "${3##*.*.*}" ] && is_digit "${ldigit="$(trim_zero "${3%%.*}")"}" \
-	&& { [ -n "${3##*.*}" ] || is_digit "${rdigit="$(trim_zero "${3##*.}")"}"; } \
-	&& [ -n "${key="$(field "$newline" "$ldigit" "$2")"}" ] && key="$(json_key "$key")" && if [ -n "$rdigit" ]
-	then jq -rnc --argjson data "$1" --argjson i "$rdigit" '$data | '"${key}"' | if type == "array" then .[$i]? // "" elif $i == 0 then . else "" end'
-	else jq -rnc --argjson data "$1" '$data | '"${key}"' | if type == "array" then join("\n") else . end'; fi
+get_path_value() ( # get_path_value <data> <paths> <command>
+	unset index nkey key; id="${3%t}"
+	[ -n "${id##*.*.*}" ] && is_integer "${nkey="${id%%.*}"}" && [ "$nkey" -ge 0 ] \
+	&& { [ -n "${id##*.*}" ] || { is_integer "${index="${id##*.}"}" && [ "$index" -ge 0 ]; }; } \
+	&& [ -n "${key="$(field "$newline" "$((nkey + 1))" "$2")"}" ] && key="$(json_key "$key")" && if [ -n "$index" ]
+	then value="$(jq -rnc --argjson data "$1" --argjson i "$((index))" '$data | '"${key}"' | if type == "array" then .[$i]? // "" elif $i == 0 then . else "" end')"
+	else value="$(jq -rnc --argjson data "$1" '$data | '"${key}"' | if type == "array" then join("\n") else . end')"; fi \
+	&& { { [ -z "${3#"${id}"}" ] && printf '%s\n' "$value"; } || totp "$value"; }
 )
 
 cmd_get() (
 	{ check_init && command_exist gpg jq fzf; } || return
-	unset key_path input; totp_mode=0; clip_mode=0
+	unset key_path input; clip_mode=0
 	data="$(decrypt)" && chosen_path="$(get_paths "$data" | choose --multi)" \
 	&& printf "Enter 'h' for more information.\n" \
 	&& while [ "${input=l}" != 'q' ]; do case "$input" in
-		t) totp_mode="$(((totp_mode + 1) % 2))"; printf 'totp mode = %d\n' "$totp_mode" ;;
 		c) clip_mode="$(((clip_mode + 1) % 2))"; printf 'clip mode = %d\n' "$clip_mode" ;;
 		l) list "$data" "$chosen_path" ;;
 		h) printf '%s' "$cmd_get_help_msg" ;;
 		*) [ -n "$input" ] && if ! value="$(get_path_value "$data" "$chosen_path" "$input")"; then printf 'invalid input!\n'
-			else { [ "$totp_mode" -ne 1 ] || value="$(totp "$value")"; } && { { [ "$clip_mode" -ne 1 ] && printf '%s\n' "$value"; } || clip "$value"; }; fi
+			elif [ "$clip_mode" -eq 1 ]; then clip "$value"; else printf '%s\n' "$value" ; fi
 	esac; printf '> '; read -r input; done
 )
 
