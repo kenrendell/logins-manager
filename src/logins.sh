@@ -213,7 +213,7 @@ cmd_get() (
 	data="$(decrypt)" && chosen_path="$(get_paths "$data" | choose --multi)" \
 	&& printf "Enter 'h' for more information.\n" \
 	&& while [ "${input=l}" != 'q' ]; do case "$input" in
-		c) clip_mode="$(((clip_mode + 1) % 2))"; printf 'clip mode = %d\n' "$clip_mode" ;;
+		c) clip_mode="$((clip_mode ^ 1))"; printf '%d\n' "$clip_mode" ;;
 		l) list "$data" "$chosen_path" ;;
 		h) printf '%s' "$cmd_get_help_msg" ;;
 		*) [ -n "$input" ] && if ! value="$(get_path_value "$data" "$chosen_path" "$input")"; then printf 'invalid input!\n'
