@@ -4,25 +4,23 @@
 
 { umask_default="$(umask)" && umask 077; } || exit
 
-fname="${0##*/}"
-logins_dir="${XDG_DATA_HOME}/logins"
-id_file="${logins_dir}/gpg-id"
-logins_file="${logins_dir}/logins.json.gpg"
-help_msg="\
+readonly fname="${0##*/}"
+readonly logins_dir="${XDG_DATA_HOME}/logins"
+readonly id_file="${logins_dir}/gpg-id"
+readonly logins_file="${logins_dir}/logins.json.gpg"
+readonly help_msg="\
 Usage: $fname set-id <ID>
        $fname init <URL>
        $fname [get|assign|show|copy|move|remove|reset]
        $fname git <command...>
-"
-cmd_get_help_msg="\
+" cmd_get_help_msg="\
 Commands:
   <int>[.<int>][t] := print the value (append 't' to get the TOTP code)
   c := toggle the clipboard mode
   l := print the list of selected paths (with format '[n] lines path')
   q := quit
-"
-newline='
-'
+" newline='
+' umask_default
 
 print_help() { printf '%s' "$help_msg" 1>&2; }
 
@@ -32,7 +30,7 @@ command_exist() (
 	done; [ -z "$error_msg" ] || { printf '%b' "$error_msg" 1>&2; return 1; }
 )
 
-check_init() { { [ -d "$logins_dir" ] && [ -f "$logins_file" ] && [ -f "$id_file" ]; } || { printf "Try 'init' command first!\n" 1>&2; return 1; }; }
+check_init() { { [ -d "$logins_dir" ] && [ -f "$logins_file" ] && [ -f "$id_file" ]; } || { printf "Try 'init' or 'set-id' command!\n" 1>&2; return 1; }; }
 
 create_dir() { ( umask "$umask_default" && mkdir -p "${logins_dir%/*}" ) && mkdir -p "$logins_dir"; }
 
@@ -57,6 +55,12 @@ json_key() ( # json_key <absolute-path>
 )
 
 choose() ( input="$(cat -)" && [ -n "$input" ] && printf '%s' "$input" | fzf "$@" )
+
+cmd_init() {
+	command_exist git || return
+	[ -d "$logins_dir" ] && { printf "Try 'reset' commmad!\n" 1>&2; return 1; }
+	create_dir && git clone "$1" "$logins_dir"
+}
 
 cmd_set_id() (
 	command_exist gpg || return
@@ -231,7 +235,7 @@ case "$1" in
 	remove) [ "$#" -eq 1 ] || { print_help; exit 1; }; cmd_remove ;;
 	get) [ "$#" -eq 1 ] || { print_help; exit 1; }; cmd_get ;;
 	set-id) [ "$#" -eq 2 ] || { print_help; exit 1; }; cmd_set_id "$2" ;;
-	init) [ "$#" -eq 2 ] || { print_help; exit 1; }; command_exist git && create_dir && git clone "$2" "$logins_dir" ;;
+	init) [ "$#" -eq 2 ] || { print_help; exit 1; }; cmd_init "$2" ;;
 	git) shift; command_exist git && create_dir && git -C "$logins_dir" "$@" ;;
 	*) print_help; exit 1 ;;
 esac
