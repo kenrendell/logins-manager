@@ -9,7 +9,8 @@ logins_dir="${XDG_DATA_HOME}/logins"
 id_file="${logins_dir}/gpg-id"
 logins_file="${logins_dir}/logins.json.gpg"
 help_msg="\
-Usage: $fname init <ID>
+Usage: $fname set-id <ID>
+       $fname init <URL>
        $fname [get|assign|show|copy|move|remove|reset]
        $fname git <command...>
 "
@@ -57,7 +58,7 @@ json_key() ( # json_key <absolute-path>
 
 choose() ( input="$(cat -)" && [ -n "$input" ] && printf '%s' "$input" | fzf "$@" )
 
-cmd_init() (
+cmd_set_id() (
 	command_exist gpg || return
 	if [ -f "$logins_file" ]; then data="$(decrypt)" && encrypt "$data" "$1"
 	else create_dir && encrypt '{}' "$1"; fi || return
@@ -223,13 +224,14 @@ cmd_get() (
 
 case "$1" in
 	reset) [ "$#" -eq 1 ] || { print_help; exit 1; }; rm -rf "$logins_dir" ;;
-	init) [ "$#" -eq 2 ] || { print_help; exit 1; }; cmd_init "$2" ;;
 	assign) [ "$#" -eq 1 ] || { print_help; exit 1; }; cmd_assign ;;
 	show) [ "$#" -eq 1 ] || { print_help; exit 1; }; cmd_show ;;
 	copy) [ "$#" -eq 1 ] || { print_help; exit 1; }; cmd_copy ;;
 	move) [ "$#" -eq 1 ] || { print_help; exit 1; }; cmd_copy true ;;
 	remove) [ "$#" -eq 1 ] || { print_help; exit 1; }; cmd_remove ;;
 	get) [ "$#" -eq 1 ] || { print_help; exit 1; }; cmd_get ;;
+	set-id) [ "$#" -eq 2 ] || { print_help; exit 1; }; cmd_set_id "$2" ;;
+	init) [ "$#" -eq 2 ] || { print_help; exit 1; }; command_exist git && create_dir && git clone "$2" "$logins_dir" ;;
 	git) shift; command_exist git && create_dir && git -C "$logins_dir" "$@" ;;
 	*) print_help; exit 1 ;;
 esac
