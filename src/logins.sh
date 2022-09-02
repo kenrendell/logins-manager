@@ -9,8 +9,8 @@ readonly logins_dir="${XDG_DATA_HOME}/logins"
 readonly id_file="${logins_dir}/gpg-id"
 readonly logins_file="${logins_dir}/logins.json.gpg"
 readonly help_msg="\
-Usage: $fname set-id <ID>
-       $fname init <URL>
+Usage: $fname set-id <GPG-ID>
+       $fname init <git-remote-URL>
        $fname [get|assign|show|copy|move|remove|reset]
        $fname git <command...>
 " cmd_get_help_msg="\

@@ -1,0 +1,14 @@
+Logins Manager
+
+Installation:
+ * run 'make install' (with root privilege)
+
+Examples:
+ # Get logins data from remote git repository
+ logins init git@github.com:<username>/<repository-name>.git
+
+ # Push logins data to remote git repository
+ logins git add --all
+ logins git commit --all --allow-empty-message --no-edit
+ logins git remote set-url git@github.com:<username>/<repository-name>.git
+ logins git push origin
