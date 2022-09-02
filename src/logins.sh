@@ -1,5 +1,5 @@
 #!/bin/sh
-
+# Logins Manager
 # Dependencies: gnupg, git, openssl, jq, fzf, wl-clipboard, lua
 
 { umask_default="$(umask)" && umask 077; } || exit
