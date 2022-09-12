@@ -10,5 +10,9 @@ Examples:
  # Push logins data to git remote repository
  logins git add --all
  logins git commit --all --allow-empty-message --no-edit
- logins git remote set-url git@github.com:<username>/<repository-name>.git
+ logins git remote add origin git@github.com:<username>/<repository-name>.git
+ logins git push origin
+
+ # Change git remote repository
+ logins git remote set-url origin git@github.com:<username>/<repository-name>.git
  logins git push origin
